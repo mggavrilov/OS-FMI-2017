@@ -1,0 +1,70 @@
+#!/bin/bash
+
+#Download the archive quietly
+wget -q "http://ftp.uni-sofia.bg/misc/uniq_files.tar.xz"
+
+#Decompress
+tar -xJf uniq_files.tar.xz
+
+#Finds number of unique contents and deletes duplicate files
+function find_duplicates {
+
+	fileCount=0
+
+	fileArray=() #contains the paths to all files in the directory and its subdirectories
+	fileContentArray=() #contains the contents of all files in fileArray; the indexes match respectively
+
+        #find all files in a directory and all its subdirectories and separate the results with the '\0' character (-print0)
+        #read the paths separated by '\0' into fileArray
+        #read the contents of the paths into fileContentArray
+        #IFS (Internal File Separator) is only set locally so no need to return its old value explicitly at the end of the function
+	while IFS= read -r -d $'\0' filename
+	do
+	   fileArray[$fileCount]="$filename"
+	   fileContentArray[$fileCount]=$(cat "${filename}")
+	   fileCount=$(( fileCount + 1 ))
+	done < <(find "${1}" -type f -print0)
+
+	echo "Directory ${1}:"
+	echo "Total files: ${fileCount}"
+	echo -n "Number of unique contents: "
+
+        #echo all file contents, sort them, leave just uniques (-u), count uniques (wc -l)
+	for c in ${fileContentArray[@]}
+	do
+	   echo $c
+	done | sort -u | wc -l
+
+	echo "Deleting duplicate contents..."
+
+        #find files with identical contents and delete them
+        #since the nested loop could try to delete the same file more than once, rm -f is used in order to suppress errors
+	i=0
+	for content in ${fileContentArray[@]}
+	do
+	   j=$(( i + 1 ))
+
+	   for content2 in ${fileContentArray[@]:$j} #start at (i+1) because all the previous combinations have already been tested
+	   do
+              #string comparison
+	      if [ "${content}" == "${content2}" ]
+	      then
+		 rm -f "${fileArray[$i]}"
+		 rm -f "${fileArray[$j]}"
+	      fi
+
+	      j=$(( j + 1 ))
+	   done
+
+	   i=$(( i + 1 ))
+	done
+
+        #count files after deleting the duplicates
+	newFileCount=$(find "${1}" -type f | wc -l)
+
+	echo "Deleted $(( fileCount - newFileCount )) duplicate files."
+}
+
+find_duplicates "uniq_files/one"
+echo ""
+find_duplicates "uniq_files/two"

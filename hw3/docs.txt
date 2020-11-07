@@ -1,0 +1,144 @@
+Функцията int isBigEndian() проверява дали машината, на която се изпълнява програмата е big или little endian като взима стойността, седяща в първия байт на 4-байтов int със стойност 1, когато е cast-нат към char*.
+Ако първият байт съдържа least-significant byte-ът (в случая единицата), то значи е little endian, ако ли не - big endian.
+
+Функциите void swap_uint16(uint16_t * val), void swap_uint32(uint32_t * val) и void swap_int32(int32_t  * val) имат за цел да byte swap-нат подадените им стойности (от little->big и big->little endianness).
+Приемат стойността по адрес и я сменят чрез shift-ове. https://stackoverflow.com/a/2637138
+
+В main функцията първоначално се проверява дали броят на подадените аргументи е правилен. Трябва да са 3, в противен случай се показва грешка.
+След това се създават файлови дескриптори за 2-та файла (източник и дестинация) - fd1, fd2 съответно. Проверява се дали отварянето им е било успешно и ако не - съобщава за грешка.
+Файлът източник се отваря в read-only mode, а целевия - write-only с флагове за truncate и create.
+
+За прочитането на BMP и DIB header-ите се прави unsigned char масив с фиксиран размер от 54 байта (14 + 40). Ако е прочетен различен от 54 брой байтове, се показва грешка.
+Първо се проверява BM Header field (редове 70-73).
+След това проверяваме какъв е endianness-а на машината. Според конвенцията на bmp формата, всички целочислени стойности се пазят в little-endian, затова ако програмата се изпълнява от big-endian машина, трябва да byte swap-нем прочетените стойности little->big endian. Понеже в bmpHeader масива стойностите се пазят в little-endian, няма нужда да ги byte swap-ваме преди да бъдат записани в новия bmp файл.
+
+Последователно се четат от масива bmpHeaders всички стойности, които трябва да бъдат проверени спрямо изискванията. Четенето става чрез cast-ване на pointer към масива + offset към искания целочислен размер, на който се намира търсената стоност по стандарт. Напр. dibHeader = *(uint32_t*)(bmpHeaders + 14);
+За всяка такава прочетена стойност, byte swap-ваме, ако се намираме в big endian, проверяваме дали стойността покрива изискванията и ако не - се показва грешка.
+
+1. dibHeader (редове 79-89)
+2. width, height (редове 93-108). Тук проверяваме възможността height да е отрицателно, което би означавало, че color table-ът, е записан отгоре-надолу. Взимаме абсолютната стойност и я пазим в absHeight.
+3. color depth (редове 111-121)
+4. compression method (редове 124-134)
+
+Накрая, след като сме проверили, че всички изисквания са изпълнени, записваме BMP и DIB header-ите в целевия файл (редове 137-141); показва се грешка при неуспешен запис.
+
+Ред 142:
+uint8_t padding = width % 4;
+Използва се, защото ако широчината на картинката не се дели точно на 4 байта (32-bit DWORD), накрая на всеки ред се записват width % 4 служебни байта (padding).
+
+На следващите редове се заделя динамично памет за тримерен масив: първото измерение е височината, второто - широчината, а третото, което е с размер 3 - за стойността на всеки от цветовете в даден пиксел (подредба син, зелен, червен).
+colorTable[i] дава i-тия ред
+colorTable[i][j] дава пиксел, който се намира на i-тия ред и j-тия стълб
+colorTable[i][j][k] k={1,2,3} дава стойността за даден цвят на пиксел, който се намира на на i-тия ред и j-тия стълб
+След всяко алокиране на памет чрез malloc има проверка за това дали то е било успешно и ако не - се показва съобщение за грешка.
+
+Тук четем 3 байта за 3-те цвята на всеки пиксел [i][j]. Ако сме прочели друг брой байтове, различен от 3, се показва грешка.
+редове 167-170:
+if(read(fd, colorTable[i][j], 3) != 3)
+{
+	errx(1, "Couldn't read file.");
+}
+
+Тук накрая на всеки ред [i] seek-ваме файла източник с padding брой байта. Накрая, когато записваме color table-а, по конвенция пишем нули в байтовете за padding. При неуспешен lseek, даваме съобщение за грешка.
+редове 173-176:
+if(lseek(fd, padding, SEEK_CUR) == -1)
+{
+	errx(1, "Couldn't seek file.");
+}
+
+Редове 180-183 съдържа масиви с размер 3 от тип uint8_t с необходимите за целите на програмата цветове.
+За да сменим цвета на даден пиксел с цвета на някой от тези масиви, изпълняваме командата memcpy. Копират се 3-те клетки от масива с цвета в съответните 3 клетки на пиксела, чийто цвят искаме да сменим.
+
+На редове 186-202 се чертаят хоризонталните линии - червена и зелена, като проверяваме дали височината е била положителна или отрицателна, за да знаем къде чертаем горната и къде долната линия.
+
+На редове 205-211 се чертаят вертикалните линии.
+
+На редове 214-217 се чертаят четирите точки в ъглите.
+
+На редове 220-237 записваме новополучения color table в целевия файл.
+За всеки пиксел [i][j] пишем по 3 байта за 3-те му цвята. Ако запишем различен брой байтове, се показва грешка.
+редове 224-227:
+if(write(fd2, colorTable[i][j], 3) != 3)
+{
+	errx(1, "Couldn't write color table to file.");
+}
+
+След това, накрая на всеки ред [i] пишем padding брой байтове, съдържащи нула. Ако запишем различен брой байтове, се показва грешка.
+редове 230-236:
+for(uint8_t p = 0; p < padding; ++p)
+{
+	if(write(fd2, "0", 1) != 1)
+	{
+		errx(1, "Couldn't write padding to file.");
+	}
+}
+
+На редове 240-250 освобождаваме заделената памет.
+
+На редове 253-254 затваряме файловите дескриптори.
+
+Уведомяваме потребителя за успешно извършена операция.
+write(1, "Image processed successfully.\n", 30);
+
+Връщаме резултат 0:
+return 0;
+
+Кодът е направен така, че промените по color table-а да са по-четими и по-лесни за промяна. Четенето и писането на 3 байта width*height пъти обаче е доста по-бавно отколкото прочитането и записът на всички байтове наведнъж. Ето решение, което прави това и използва формули, за да промени цветовете на пикселите. Работи по-бързо, но трудно се чете и разбира:
+
+//allocate memory for color table
+uint8_t * colorTable = (uint8_t*) malloc(width * height * 3 * sizeof(uint8_t));
+
+if(colorTable == NULL)
+{
+	err(1, "Couldn't allocate memory.");
+}
+
+//read color table into dynamically allocated array
+read(fd, colorTable, width * height * 3);
+
+//Order: blue, green, red
+uint8_t red[3] = {0, 0, 255};
+uint8_t green[3] = {0, 255, 0};
+uint8_t blue[3] = {255, 0, 0};
+uint8_t black[3] = {0, 0, 0};
+
+uint32_t pixelWidth = width * 3;
+uint32_t pixelHeight = height * 3;
+uint32_t pixelWidthHeight = width * height * 3;
+uint8_t pixel = 3;
+
+//bottom line in red
+for(int i = (pixelWidth * 4) + (5 * pixel); i < (pixelWidth * 4) + pixelWidth - (5 * pixel); i += 3)
+{
+	memcpy(&colorTable[i], red, 3);
+}
+
+//top line in green
+for(int i = pixelWidthHeight - (pixelWidth * 5) + (5 * pixel); i < (pixelWidthHeight) - (pixelWidth * 4) - (5 * pixel); i += 3)
+{
+	memcpy(&colorTable[i], green, 3);
+}
+
+//left line in blue
+for(int i = (pixelWidth * 5) + (4 * pixel); i < (pixelWidthHeight) - (pixelWidth * 5) + (4 * pixel); i += (pixelWidth))
+{
+	memcpy(&colorTable[i], blue, 3);
+}
+
+//right line in blue
+for(int i = (pixelWidth * 6) - (5 * pixel); i < (pixelWidthHeight) - (pixelWidth * 4) - (5 * pixel); i += (pixelWidth))
+{
+	memcpy(&colorTable[i], blue, 3);
+}
+
+//black dots in the 4 corners
+memcpy(&colorTable[(pixelWidth * 4) + (4 * pixel)], black, 3);
+memcpy(&colorTable[(pixelWidth * 5) - (5 * pixel)], black, 3);
+memcpy(&colorTable[(pixelWidthHeight) - (5 * pixelWidth) + (4 * pixel)], black, 3);
+memcpy(&colorTable[(pixelWidthHeight) - (4 * pixelWidth) - (5 * pixel)], black, 3);
+
+//write color table
+write(fd2, colorTable, width * height * 3);
+
+//free memory
+free(colorTable);
